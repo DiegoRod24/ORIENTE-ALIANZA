@@ -1,8 +1,8 @@
-const CACHE = 'oriente-alianza-v1'
-const CORE = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg']
+const CACHE = 'oriente-alianza-v4'
+const CORE = ['/', '/manifest.webmanifest', '/icon.svg']
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)))
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)).catch(() => {}))
   self.skipWaiting()
 })
 
@@ -13,9 +13,20 @@ self.addEventListener('activate', event => {
 
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return
-  event.respondWith(fetch(event.request).then(response => {
-    const copy = response.clone()
-    caches.open(CACHE).then(cache => cache.put(event.request, copy))
+  const request = event.request
+  if (request.mode === 'navigate') {
+    event.respondWith(fetch(request).then(response => {
+      const copy = response.clone()
+      caches.open(CACHE).then(cache => cache.put('/', copy)).catch(() => {})
+      return response
+    }).catch(() => caches.match('/')))
+    return
+  }
+  event.respondWith(caches.match(request).then(cached => cached || fetch(request).then(response => {
+    if (response && response.ok && new URL(request.url).origin === self.location.origin) {
+      const copy = response.clone()
+      caches.open(CACHE).then(cache => cache.put(request, copy)).catch(() => {})
+    }
     return response
-  }).catch(() => caches.match(event.request).then(cached => cached || caches.match('/index.html'))))
+  })))
 })
