@@ -1,12 +1,16 @@
 {
-  "name": "Oriente Alianza",
+  "name": "Oriente Alianza · Modo Tribuna",
   "short_name": "Oriente",
-  "description": "Experiencia piloto de Tribuna Oriente",
+  "description": "Experiencia piloto para preparar, orientar y coordinar Tribuna Oriente.",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#030a13",
-  "theme_color": "#071833",
+  "orientation": "portrait-primary",
+  "background_color": "#02070d",
+  "theme_color": "#02070d",
   "lang": "es-PE",
+  "categories": ["sports", "lifestyle"],
   "icons": [
     {"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
   ]
