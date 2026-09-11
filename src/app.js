@@ -1,111 +1,152 @@
-const state = {
-  tab: 'inicio',
-  liveMode: 'PREVIA',
-  currentSong: 4,
-  notice: 'Faltan 12 minutos. Ten tus globos preparados.',
-  adminOpen: false,
-  orderReady: true,
+const APP_VERSION = '0.4.0'
+const STORAGE_KEY = 'oriente_alianza_state_v4'
+
+const baseZones = [
+  { code:'O-01', name:'Acceso Oriente', kind:'access', note:'Ingreso y orientación general.', points:[[4,88],[23,88],[23,98],[4,98]], fixed:true },
+  { code:'O-03', name:'Punto de entrega', kind:'pickup', note:'Retiro de pedidos y colaboraciones reservadas.', points:[[77,88],[96,88],[96,98],[77,98]], fixed:true },
+  { code:'O-10', name:'Oriente lateral', kind:'general', note:'Zona recomendada para público general.', points:[[8,60],[32,60],[35,84],[7,85]], fixed:true },
+  { code:'O-12', name:'Oriente central', kind:'organization', note:'Sector operativo para coordinación, banderas e instrumentos.', points:[[36,58],[64,58],[64,88],[36,88]], fixed:true },
+  { code:'O-14', name:'Oriente lateral', kind:'general', note:'Zona recomendada para público general.', points:[[68,60],[92,60],[93,85],[65,84]], fixed:true },
+]
+
+const songs = Array.from({length:8}, (_,i)=>({ id:i+1, title:`Canto ${String(i+1).padStart(2,'0')}` }))
+
+const defaults = {
+  tab:'inicio', adminOpen:false, adminSection:'control', selectedZone:null, installPrompt:null,
+  toast:null, learned:[1,2,4], vibration:true, feedback:null, feedbackModal:false, songModal:null, locatorOpen:false,
+  match:{home:'ALIANZA',rival:'RIVAL',venue:'Matute',dateLabel:'Próximo partido',time:'20:00',gates:'17:30',live:false},
+  live:{mode:'PREVIA',song:4,notice:'Faltan 12 minutos. Ten tus elementos del recibimiento preparados.',updatedAt:Date.now()},
+  order:{status:'ready',number:'0184',item:'Pack recibimiento',qty:2,pickup:'O-03',readyAt:'18:10'},
+  zones:baseZones, draftZonePoints:[],
 }
 
-const songs = [1,2,3,4,5].map(id => ({ id, title: `Canto ${String(id).padStart(2,'0')}` }))
+const persistedKeys = ['learned','vibration','feedback','match','live','order','zones']
+const persisted = loadPersisted()
+const state = {...defaults,...persisted,zones:Array.isArray(persisted.zones)&&persisted.zones.length?persisted.zones:baseZones}
 
-function escapeHtml(value='') {
-  return String(value).replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]))
+const kindMeta = {
+  general:{label:'Público general',color:'#2ed17a'}, organization:{label:'Organización',color:'#ff6675'},
+  pickup:{label:'Pedidos',color:'#f4c84c'}, access:{label:'Acceso',color:'#4aa8ff'}, banner:{label:'Manto / bandera',color:'#a986ff'}
 }
 
-function liveLabel(){
-  if(state.liveMode==='CANTO') return `CANTO ${String(state.currentSong).padStart(2,'0')}`
-  if(state.liveMode==='GLOBOS') return 'GLOBOS ARRIBA'
-  if(state.liveMode==='MANTO') return 'MANTO EN TU SECTOR'
-  return 'PREVIA'
+function loadPersisted(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}')||{}}catch{return{}}}
+function persist(){try{const payload={};persistedKeys.forEach(k=>payload[k]=state[k]);localStorage.setItem(STORAGE_KEY,JSON.stringify(payload))}catch{}}
+function escapeHtml(value=''){return String(value).replace(/[&<>'"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]))}
+function clamp(n,min,max){return Math.max(min,Math.min(max,n))}
+function fmtTime(ts){try{return new Date(ts).toLocaleTimeString('es-PE',{hour:'2-digit',minute:'2-digit'})}catch{return'--:--'}}
+function liveLabel(){const m=state.live.mode;if(m==='CANTO')return `CANTO ${String(state.live.song).padStart(2,'0')}`;if(m==='GLOBOS')return'GLOBOS ARRIBA';if(m==='MANTO')return'MANTO EN TU SECTOR';if(m==='MENSAJE')return'MENSAJE DE TRIBUNA';return'PREVIA'}
+function liveIcon(){return({PREVIA:'◌',GLOBOS:'○',MANTO:'▱',CANTO:'♫',MENSAJE:'!'})[state.live.mode]||'◌'}
+function progressPct(){return Math.round((state.learned.length/songs.length)*100)}
+function orderStatus(){return{preparing:{label:'PREPARANDO',tone:'warning',desc:'Estamos preparando tu pedido.'},ready:{label:'LISTO PARA RETIRAR',tone:'success',desc:`Disponible desde ${state.order.readyAt}.`},delivered:{label:'ENTREGADO',tone:'info',desc:'Pedido entregado correctamente.'}}[state.order.status]||{label:'PENDIENTE',tone:'muted',desc:'Pendiente'}}
+function isIOS(){return/iphone|ipad|ipod/i.test(navigator.userAgent)}
+function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches||navigator.standalone===true}
+function zoneCentroid(points){const n=Math.max(points.length,1);return[points.reduce((a,p)=>a+p[0],0)/n,points.reduce((a,p)=>a+p[1],0)/n]}
+function polygonString(points){return points.map(p=>p.join(',')).join(' ')}
+function vibrate(pattern=35){if(state.vibration&&navigator.vibrate)navigator.vibrate(pattern)}
+function showToast(message,tone='info'){state.toast={message,tone,id:Date.now()};render();const id=state.toast.id;setTimeout(()=>{if(state.toast?.id===id){state.toast=null;render()}},2600)}
+
+function header(){
+  const installBtn=isStandalone()?'':`<button class="top-install" id="install-btn" title="Instalar app"><span>＋</span><b>Instalar</b></button>`
+  return `<header class="topbar"><button class="brand" data-tab="inicio" aria-label="Ir al inicio"><span class="brand-mark"><i></i><b>OA</b></span><span><strong>ORIENTE</strong><small>Modo tribuna · piloto</small></span></button><div class="top-actions">${installBtn}<span class="live-pill ${state.match.live?'is-live':''}"><span class="pulse"></span>${state.match.live?'EN VIVO':'PILOTO'}</span><button class="icon-button" id="open-admin" aria-label="Abrir centro de control">⚙</button></div></header>`
 }
+
+function partyCard(title,text,abbr,status){return `<article class="party-card"><span class="party-badge">${abbr}</span><div class="party-copy"><div><h3>${title}</h3><span>${status}</span></div><p>${text}</p></div></article>`}
 
 function home(){
-  return `
-  <div class="page">
-    <section class="hero-card"><div class="hero-overlay"></div><div class="hero-content">
-      <div class="eyebrow">● PRÓXIMO PARTIDO · PILOTO ORIENTE</div>
-      <div class="match-row"><div class="team"><span class="team-badge">A</span><strong>ALIANZA</strong></div><div class="versus"><small>MATUTE</small><b>VS</b><span>20:00</span></div><div class="team muted"><span class="team-badge rival">R</span><strong>RIVAL</strong></div></div>
-      <div class="heat"><span>🔥</span><div><small>ORIENTE</small><strong>CALDERA</strong></div></div>
-      <button class="primary big" data-tab="tribuna">📡 ENTRAR AL MODO TRIBUNA</button>
-    </div></section>
-    <section class="status-grid">
-      <button class="mini-card" data-tab="repertorio"><div class="mini-icon">🎶</div><div><small>REPERTORIO</small><b>3 de 5 listos</b></div><span>›</span></button>
-      <button class="mini-card" data-tab="pedidos"><div class="mini-icon">📦</div><div><small>MI PEDIDO</small><b>${state.orderReady?'Listo para retirar':'Preparando'}</b></div><span>›</span></button>
-    </section>
-    <section class="section-head"><div><small>PREPÁRATE</small><h2>La fiesta de hoy</h2></div><span class="tag">3 indicaciones</span></section>
-    <div class="party-list">
-      <article class="party-card"><span class="party-icon">🎊</span><div><h3>Papel picado</h3><p>Tenlo listo y úsalo solo cuando se active la señal.</p></div></article>
-      <article class="party-card"><span class="party-icon">🏳️</span><div><h3>Manto</h3><p>Cuando llegue a tu sector, manos arriba y déjalo avanzar.</p></div></article>
-      <article class="party-card"><span class="party-icon">🎈</span><div><h3>Globos</h3><p>Levántalos en el recibimiento. No los arrojes al campo.</p></div></article>
-    </div>
-    <button class="location-banner" data-tab="mapa"><span class="location-icon">📍</span><span><small>¿PRIMERA VEZ EN ORIENTE?</small><b>Ubícate antes de entrar</b><em>Accesos, zonas, pedidos y orientación</em></span><span>›</span></button>
-    <div class="culture-note"><span>🛡️</span><p><b>La tribuna se vive entre todos.</b> Sigue únicamente indicaciones autorizadas, cuida los pasillos y evita lanzar objetos al campo.</p></div>
-  </div>`
+  const p=progressPct(),order=orderStatus()
+  return `<div class="page home-page"><section class="hero-card"><div class="stadium-lights"><i></i><i></i><i></i><i></i></div><div class="hero-grain"></div><div class="hero-content"><div class="hero-kicker"><span class="dot"></span>${escapeHtml(state.match.dateLabel)} · ORIENTE</div><div class="match-row"><div class="team"><span class="crest home-crest"><b>A</b><i></i></span><strong>${escapeHtml(state.match.home)}</strong></div><div class="versus"><small>${escapeHtml(state.match.venue)}</small><b>VS</b><span>${escapeHtml(state.match.time)}</span></div><div class="team muted"><span class="crest rival-crest"><b>R</b></span><strong>${escapeHtml(state.match.rival)}</strong></div></div><div class="hero-meta"><span><small>PUERTAS</small><b>${escapeHtml(state.match.gates)}</b></span><span><small>PARTIDO</small><b>${escapeHtml(state.match.time)}</b></span><span><small>TRIBUNA</small><b>ORIENTE</b></span></div><button class="primary big live-entry" data-tab="tribuna"><span class="signal-icon">◉</span><span><small>SEÑAL DE TRIBUNA</small><b>ENTRAR AL MODO EN VIVO</b></span><i>›</i></button></div></section>
+  <section class="quick-grid"><button class="quick-card" data-tab="repertorio"><span class="quick-icon">♫</span><span><small>REPERTORIO</small><b>${state.learned.length}/${songs.length} preparados</b><em>${p}% completado</em></span><i>›</i></button><button class="quick-card ${state.order.status==='ready'?'ready':''}" data-tab="pedidos"><span class="quick-icon">□</span><span><small>MI PEDIDO #${escapeHtml(state.order.number)}</small><b>${order.label}</b><em>${escapeHtml(state.order.pickup)} · ${escapeHtml(state.order.readyAt)}</em></span><i>›</i></button></section>
+  <section class="section-head"><div><small>HOY EN ORIENTE</small><h2>Tu ruta antes del partido</h2></div><span class="section-pill">Piloto</span></section><div class="day-timeline"><article><time>${escapeHtml(state.match.gates)}</time><span class="timeline-dot access"></span><div><b>Ingreso a Oriente</b><small>Ubícate, revisa tu sector y mantén libres los accesos.</small></div></article><article><time>${escapeHtml(state.order.readyAt)}</time><span class="timeline-dot pickup"></span><div><b>Retiro de pedidos</b><small>Si reservaste, revisa el punto ${escapeHtml(state.order.pickup)}.</small></div></article><article><time>19:50</time><span class="timeline-dot banner"></span><div><b>Preparación del recibimiento</b><small>Abre Modo Tribuna para ver la indicación activa.</small></div></article><article><time>${escapeHtml(state.match.time)}</time><span class="timeline-dot general"></span><div><b>Partido</b><small>Celular abajo cuando ya sepas la indicación. La cancha primero.</small></div></article></div>
+  <section class="section-head"><div><small>PREPÁRATE</small><h2>La fiesta de hoy</h2></div><button class="text-btn" data-tab="tribuna">Ver señal ›</button></section><div class="party-grid">${partyCard('Papel picado','Confirma cuándo corresponde usarlo y evita lanzarlo al campo.','PC','Preparar')}${partyCard('Manto grande','Si pasa por tu sector, manos arriba y permite que avance.','MT','Coordinado')}${partyCard('Globos','Tenlos listos y levántalos solo cuando llegue la señal.','GB','Preparar')}</div>
+  <button class="orientation-card" data-tab="mapa"><span class="map-mini"><i></i><i></i><i></i><b>ORI</b></span><span><small>¿PRIMERA VEZ EN ORIENTE?</small><b>Mira tu zona antes de entrar</b><em>Accesos · zonas operativas · puntos de entrega</em></span><i>›</i></button>
+  <section class="community-card"><div><small>LA TRIBUNA HABLA</small><h3>¿Cómo estuvo Oriente?</h3><p>Después del partido deja una evaluación corta para mejorar coordinación, acceso y ambiente.</p></div><button class="ghost" id="feedback-btn">${state.feedback?'Actualizar opinión':'Dar opinión'}</button></section><div class="culture-note"><span>OA</span><p><b>La fiesta se coordina, no se improvisa.</b> Sigue indicaciones autorizadas, respeta los pasillos y las reglas del recinto. Proyecto piloto no oficial.</p></div></div>`
 }
 
 function live(){
-  const isSong = state.liveMode==='CANTO'
-  return `<div class="page live-page"><div class="live-status"><span class="pulse"></span> TRIBUNA CONECTADA <b>· DEMO</b></div>
-    <section class="command-card mode-${state.liveMode.toLowerCase()}"><small>AHORA EN ORIENTE</small><h1>${liveLabel()}</h1>
-      ${isSong ? `<div class="song-number">#${state.currentSong}</div><p class="demo-lyrics">Aquí aparecerá la letra autorizada del canto seleccionado.</p><div class="command-tip">🔊 Sigue a la tribuna, no al celular.</div>` : `<div style="font-size:56px">📣</div><p>${escapeHtml(state.notice)}</p><div class="command-tip">📳 Recibirás una vibración breve al cambiar la indicación.</div>`}
-    </section>
-    <section class="what-now"><div class="section-head"><div><small>CONTEXTO</small><h2>¿Qué está pasando?</h2></div><span>👀</span></div><p>${escapeHtml(state.notice)}</p></section>
-    <div class="phone-down"><span>💙</span><div><b>Ya sabes qué hacer.</b><small>Ahora mira la cancha y alienta.</small></div></div>
-  </div>`
+  const song=state.live.mode==='CANTO',updated=fmtTime(state.live.updatedAt)
+  return `<div class="page live-page"><div class="live-toolbar"><div><span class="connection-dot"></span><b>MODO TRIBUNA</b><small>Demo local · última señal ${updated}</small></div><button class="vibrate-toggle ${state.vibration?'on':''}" id="vibration-btn">${state.vibration?'Vibración ON':'Vibración OFF'}</button></div><section class="command-card mode-${state.live.mode.toLowerCase()}"><div class="command-rings"><i></i><i></i><i></i></div><span class="command-symbol">${liveIcon()}</span><small>AHORA EN ORIENTE</small><h1>${liveLabel()}</h1>${song?`<div class="song-chip">REPERTORIO · #${state.live.song}</div><p class="live-main-copy">Aquí aparecerá únicamente contenido del canto que esté autorizado para mostrarse.</p>`:`<p class="live-main-copy">${escapeHtml(state.live.notice)}</p>`}<div class="command-tip"><span>⌁</span><b>${song?'Sigue el ritmo de la tribuna.':'Espera la señal antes de actuar.'}</b></div></section><div class="live-two-col"><section class="context-card"><small>QUÉ ESTÁ PASANDO</small><h3>${liveLabel()}</h3><p>${escapeHtml(state.live.notice)}</p></section><section class="phone-down"><span>90'</span><div><b>Ya sabes qué hacer.</b><small>Ahora mira la cancha y alienta.</small></div></section></div><section class="live-help"><span>i</span><div><b>¿No ves cambios?</b><small>Esta versión todavía funciona en modo local. La sincronización entre todos los celulares se conectará con Supabase Realtime en la siguiente etapa.</small></div></section></div>`
 }
 
+function stadiumSvg(id='map'){
+  return `<svg class="stadium-svg" id="${id}" viewBox="0 0 100 100" role="img" aria-label="Mapa esquemático de Tribuna Oriente"><defs><linearGradient id="pitchg" x1="0" x2="1"><stop offset="0" stop-color="#0e5a36"/><stop offset="1" stop-color="#0a4129"/></linearGradient></defs><rect x="9" y="7" width="82" height="43" rx="3" fill="url(#pitchg)" opacity=".72"/><rect x="9" y="7" width="82" height="43" rx="3" fill="none" stroke="rgba(210,255,225,.35)" stroke-width=".45"/><line x1="50" y1="7" x2="50" y2="50" stroke="rgba(210,255,225,.3)" stroke-width=".4"/><circle cx="50" cy="28.5" r="7" fill="none" stroke="rgba(210,255,225,.28)" stroke-width=".4"/><text x="50" y="31" text-anchor="middle" class="pitch-label">CANCHA</text>${state.zones.map(zoneSvg).join('')}</svg>`
+}
+function zoneSvg(z){const m=kindMeta[z.kind]||kindMeta.general,[cx,cy]=zoneCentroid(z.points);return `<g class="zone-shape" data-zone="${escapeHtml(z.code)}"><polygon points="${polygonString(z.points)}" fill="${m.color}" fill-opacity=".22" stroke="${m.color}" stroke-opacity=".8" stroke-width=".7"/><text x="${cx}" y="${cy}" text-anchor="middle" class="zone-label">${escapeHtml(z.code)}</text></g>`}
+function zoneDetail(z){const m=kindMeta[z.kind]||kindMeta.general;return `<div class="sheet-backdrop" id="zone-sheet-backdrop"></div><section class="zone-sheet"><button class="sheet-close" id="close-zone">×</button><div class="sheet-handle"></div><span class="zone-kind" style="--zone-color:${m.color}"><i></i>${m.label}</span><small>${escapeHtml(z.code)}</small><h3>${escapeHtml(z.name)}</h3><p>${escapeHtml(z.note)}</p><div class="zone-guidance"><b>Recomendación</b><small>${z.kind==='organization'?'Si buscas sentarte con más comodidad, elige un sector de público general.':z.kind==='pickup'?'Ten tu código de pedido listo antes de llegar al punto.':'Verifica el código del sector al ingresar.'}</small></div><button class="primary full" id="close-zone-primary">Entendido</button></section>`}
 function map(){
-  return `<div class="page"><div class="section-head map-title"><div><small>MAPA PILOTO</small><h2>Oriente</h2></div><button class="ghost" id="where-btn">📷 ¿Dónde estoy?</button></div>
-    <div class="stadium-map"><div class="pitch"><span>CANCHA</span><i></i></div><button class="zone z1 green">O-10</button><button class="zone z2 red">O-12</button><button class="zone z3 green">O-14</button><button class="zone z4 gold">📦 O-03</button><div class="oriente-label">TRIBUNA ORIENTE</div></div>
-    <div class="legend"><span><i class="green"></i>Público general</span><span><i class="red"></i>Organización</span><span><i class="gold"></i>Pedidos</span></div>
-    <div class="party-card"><span class="party-icon">🧭</span><div><h3>Editor de zonas</h3><p>La siguiente versión permitirá que el administrador dibuje sectores, puntos de retiro y áreas de organización desde su celular.</p></div></div>
-  </div>`
+  const selected=state.zones.find(z=>z.code===state.selectedZone)
+  return `<div class="page map-page"><div class="section-head map-title"><div><small>ORIENTACIÓN PILOTO</small><h2>Tribuna Oriente</h2></div><button class="ghost compact" id="where-btn">⌖ Ubicarme</button></div><p class="lead">Toca una zona para entender para qué se usa. Los sectores mostrados son demostrativos hasta cargar el plano definitivo.</p><div class="stadium-map-shell">${stadiumSvg('user-map')}<div class="map-watermark">MATUTE · ORIENTE</div></div><div class="legend">${Object.entries(kindMeta).map(([k,v])=>`<span><i style="background:${v.color}"></i>${v.label}</span>`).join('')}</div><div class="zone-list">${state.zones.map(z=>{const m=kindMeta[z.kind]||kindMeta.general;return `<button class="zone-row" data-zone="${escapeHtml(z.code)}"><span class="zone-dot" style="background:${m.color}"></span><span><b>${escapeHtml(z.code)} · ${escapeHtml(z.name)}</b><small>${escapeHtml(z.note)}</small></span><i>›</i></button>`}).join('')}</div>${selected?zoneDetail(selected):''}</div>`
 }
 
 function orders(){
-  return `<div class="page"><div class="section-head"><div><small>RESERVA DEMO</small><h2>Mi pedido</h2></div><span>🎫</span></div>
-    <section class="order-card"><div class="order-status">✅ ${state.orderReady?'LISTO PARA RETIRAR':'PREPARANDO PEDIDO'}</div><div class="order-number">#0184</div><h3>Pack recibimiento × 2</h3><p>Contenido demostrativo sujeto a lo que autorice la organización.</p><div class="pickup">📍 <div><small>PUNTO DE ENTREGA</small><b>Oriente · O-03</b><span>Disponible desde 18:10</span></div></div><div class="qr-demo"><span style="font-size:48px">▦</span><span>QR DE RETIRO</span><small>El encargado lo escaneará al entregar</small></div></section>
-    <button class="ghost full" id="toggle-order">Simular cambio de estado</button>
-  </div>`
+  const os=orderStatus(),steps=[['Reserva confirmada','done','17:20'],['Pedido preparado',state.order.status==='preparing'?'current':'done',state.order.status==='preparing'?'En proceso':state.order.readyAt],['Entregado en tribuna',state.order.status==='delivered'?'done':'',state.order.status==='delivered'?'Completado':'Pendiente']]
+  return `<div class="page orders-page"><div class="section-head"><div><small>RESERVA PILOTO</small><h2>Mi pedido</h2></div><span class="section-pill">#${escapeHtml(state.order.number)}</span></div><section class="order-ticket ${os.tone}"><div class="ticket-top"><span class="order-status"><i></i>${os.label}</span><small>${escapeHtml(state.order.pickup)}</small></div><div class="ticket-number">#${escapeHtml(state.order.number)}</div><h3>${escapeHtml(state.order.item)} × ${state.order.qty}</h3><p>Reserva demostrativa. No procesa pagos todavía.</p><div class="pickup-card"><span class="pickup-pin">⌖</span><div><small>PUNTO DE ENTREGA</small><b>Oriente · ${escapeHtml(state.order.pickup)}</b><em>${escapeHtml(os.desc)}</em></div></div><div class="pickup-code"><span>${escapeHtml(state.order.number)}</span><div><b>CÓDIGO DE RETIRO</b><small>Muestra este código al encargado</small></div></div></section><div class="order-timeline">${steps.map(([t,c,time])=>`<article class="${c}"><span></span><div><b>${t}</b><small>${time}</small></div></article>`).join('')}</div><section class="catalog-card"><div><small>RESERVAS PARA EL RECIBIMIENTO</small><h3>Separa antes de llegar</h3><p>La disponibilidad y los elementos finales deberán ser configurados por la organización y respetar las reglas del estadio.</p></div><div class="catalog-grid"><button data-reserve="Pack recibimiento"><span>PK</span><b>Pack recibimiento</b><small>Reserva demo</small></button><button data-reserve="Pillada / artículo"><span>AR</span><b>Pillada / artículo</b><small>Reserva demo</small></button><button data-reserve="Colaboración fiesta"><span>AP</span><b>Apoyo a la fiesta</b><small>Sin pago aún</small></button></div></section></div>`
 }
 
-function repertorio(){
-  return `<div class="page"><div class="section-head"><div><small>SEMANA DE PARTIDO</small><h2>Repertorio</h2></div><span class="tag">60%</span></div><div class="progress"><i style="width:60%"></i></div><p class="lead">Repasa antes de llegar. Durante el partido solo verás el canto que esté activo.</p><div class="song-list">${songs.map((s,i)=>`<article><span>${String(s.id).padStart(2,'0')}</span><div><b>${s.title}</b><small>${i<3?'Aprendido':'Pendiente'}</small></div><span>${i<3?'✅':'🎵'}</span></article>`).join('')}</div></div>`
+function songRow(s){const learned=state.learned.includes(s.id);return `<article class="song-row ${learned?'learned':''}"><button class="song-open" data-song-open="${s.id}"><span class="song-index">${String(s.id).padStart(2,'0')}</span><span><b>${escapeHtml(s.title)}</b><small>${learned?'Listo para tribuna':'Pendiente de repaso'}</small></span><i>›</i></button><button class="learn-btn ${learned?'on':''}" data-learn="${s.id}" aria-label="${learned?'Marcar pendiente':'Marcar aprendido'}">${learned?'✓':'+'}</button></article>`}
+function repertorio(){const p=progressPct();return `<div class="page songs-page"><div class="section-head"><div><small>SEMANA DE PARTIDO</small><h2>Repertorio</h2></div><span class="section-pill">${p}%</span></div><section class="training-progress"><div class="progress-copy"><b>${state.learned.length} de ${songs.length}</b><small>cantos repasados</small></div><div class="progress"><i style="width:${p}%"></i></div><p>Marca lo que ya conoces. Durante el partido solo se mostrará el canto que active la coordinación.</p></section><div class="song-list">${songs.map(songRow).join('')}</div><section class="repertoire-note"><span>♫</span><div><b>Contenido protegido</b><small>Las letras completas y audios se cargarán únicamente cuando tengamos permiso o contenido propio/autorizado.</small></div></section></div>`}
+
+function feedbackModal(){
+  if(!state.feedbackModal)return'';const current=state.feedback||{score:4,topic:'ambiente',text:''}
+  return `<div class="modal-backdrop"><section class="modal-card"><button class="modal-close" id="close-feedback">×</button><small>LA TRIBUNA HABLA</small><h2>¿Cómo estuvo Oriente?</h2><p>Tu evaluación se guarda solo en este dispositivo mientras estamos en modo piloto.</p><label>Experiencia general</label><div class="score-row">${[1,2,3,4,5].map(n=>`<button data-score="${n}" class="${current.score===n?'active':''}">${n}</button>`).join('')}</div><label>¿Qué debemos mejorar?</label><div class="topic-row">${[['ambiente','Ambiente'],['coordinacion','Coordinación'],['acceso','Acceso'],['pedidos','Pedidos']].map(([v,l])=>`<button data-topic="${v}" class="${current.topic===v?'active':''}">${l}</button>`).join('')}</div><label>Comentario</label><textarea id="feedback-text" placeholder="Cuéntanos algo concreto…">${escapeHtml(current.text||'')}</textarea><button class="primary full" id="save-feedback">Guardar opinión</button></section></div>`
 }
+function songModal(){if(!state.songModal)return'';const s=songs.find(x=>x.id===state.songModal);if(!s)return'';const learned=state.learned.includes(s.id);return `<div class="modal-backdrop"><section class="modal-card song-modal"><button class="modal-close" id="close-song">×</button><span class="song-big-index">${String(s.id).padStart(2,'0')}</span><small>ENSAYO</small><h2>${escapeHtml(s.title)}</h2><div class="lyrics-placeholder"><i>♫</i><p>La letra autorizada aparecerá aquí cuando se cargue el repertorio real.</p></div><button class="primary full" data-learn="${s.id}">${learned?'Marcar como pendiente':'✓ Ya me lo sé'}</button></section></div>`}
+function locatorModal(){if(!state.locatorOpen)return'';return `<div class="modal-backdrop"><section class="modal-card locator-modal"><button class="modal-close" id="close-locator">×</button><small>¿DÓNDE ESTOY?</small><h2>Ubícate en Oriente</h2><p>En el piloto puedes escribir un código de sector. Cuando coloquemos QRs físicos podrás apuntar la cámara.</p><div class="camera-box" id="camera-box"><video id="camera-video" playsinline muted></video><div class="camera-frame"></div><span id="camera-status">Cámara apagada</span></div><button class="ghost full" id="start-camera">Abrir cámara / QR</button><div class="or-divider"><span>o escribe el código</span></div><div class="manual-locator"><input id="zone-code-input" autocomplete="off" placeholder="Ej. O-12" maxlength="8"/><button class="primary" id="find-zone">Buscar</button></div><small class="modal-footnote">La cámara solo se activa si tú la autorizas.</small></section></div>`}
 
 function admin(){
-  if(!state.adminOpen) return ''
-  return `<div class="admin-backdrop"><aside class="admin-panel"><div class="admin-head"><div><small>CENTRO DE CONTROL</small><h2>Oriente en vivo</h2></div><button id="close-admin">✕</button></div><div class="admin-warning">ℹ️ Demo local. Luego estas órdenes viajarán en tiempo real.</div><label>Estado de tribuna</label><div class="admin-modes">${['PREVIA','GLOBOS','MANTO','CANTO'].map(m=>`<button data-mode="${m}" class="${state.liveMode===m?'active':''}">${m}</button>`).join('')}</div><label>Canto activo</label><div class="song-buttons">${songs.map(s=>`<button data-song="${s.id}" class="${state.currentSong===s.id?'active':''}">${s.id}</button>`).join('')}</div><label>Mensaje activo</label><textarea id="notice-input">${escapeHtml(state.notice)}</textarea><button class="primary full" id="publish-state">📡 PUBLICAR ESTADO</button></aside></div>`
+  if(!state.adminOpen)return'';const sections=[['control','Control'],['partido','Partido'],['pedidos','Pedidos'],['zonas','Zonas']]
+  return `<div class="admin-backdrop" id="admin-backdrop"><aside class="admin-panel"><div class="admin-head"><div><small>CENTRO DE CONTROL</small><h2>Oriente</h2></div><button id="close-admin">×</button></div><div class="admin-tabs">${sections.map(([id,l])=>`<button data-admin-section="${id}" class="${state.adminSection===id?'active':''}">${l}</button>`).join('')}</div>${adminSection()}</aside></div>`
 }
+function adminSection(){if(state.adminSection==='partido')return adminMatch();if(state.adminSection==='pedidos')return adminOrders();if(state.adminSection==='zonas')return adminZones();return adminControl()}
+function adminControl(){return `<div class="admin-section"><div class="admin-banner"><span>◉</span><div><b>Señal actual: ${liveLabel()}</b><small>En esta versión el control afecta este dispositivo. Realtime se conectará después.</small></div></div><label>Estado de tribuna</label><div class="admin-modes">${['PREVIA','GLOBOS','MANTO','CANTO','MENSAJE'].map(m=>`<button data-mode="${m}" class="${state.live.mode===m?'active':''}">${m}</button>`).join('')}</div><label>Canto activo</label><div class="song-buttons">${songs.map(s=>`<button data-admin-song="${s.id}" class="${state.live.song===s.id?'active':''}">${s.id}</button>`).join('')}</div><label>Mensaje activo</label><textarea id="notice-input">${escapeHtml(state.live.notice)}</textarea><div class="toggle-row"><span><b>Vibración</b><small>Aviso breve al publicar una nueva señal</small></span><button id="admin-vibration" class="switch ${state.vibration?'on':''}"><i></i></button></div><button class="primary full" id="publish-state">PUBLICAR SEÑAL</button></div>`}
+function adminMatch(){return `<div class="admin-section"><div class="form-grid"><label>Rival<input id="match-rival" value="${escapeHtml(state.match.rival)}"/></label><label>Fecha / etiqueta<input id="match-date" value="${escapeHtml(state.match.dateLabel)}"/></label><label>Hora partido<input id="match-time" type="time" value="${escapeHtml(state.match.time)}"/></label><label>Apertura puertas<input id="match-gates" type="time" value="${escapeHtml(state.match.gates)}"/></label></div><div class="toggle-row"><span><b>Marcar partido EN VIVO</b><small>Cambia el indicador superior para el piloto</small></span><button id="match-live-toggle" class="switch ${state.match.live?'on':''}"><i></i></button></div><button class="primary full" id="save-match">GUARDAR PARTIDO</button></div>`}
+function adminOrders(){return `<div class="admin-section"><div class="admin-order-card"><small>PEDIDO #${escapeHtml(state.order.number)}</small><h3>${escapeHtml(state.order.item)} × ${state.order.qty}</h3><p>Punto ${escapeHtml(state.order.pickup)} · ${escapeHtml(state.order.readyAt)}</p></div><label>Estado del pedido</label><div class="admin-modes order-modes">${[['preparing','PREPARANDO'],['ready','LISTO'],['delivered','ENTREGADO']].map(([v,l])=>`<button data-order-state="${v}" class="${state.order.status===v?'active':''}">${l}</button>`).join('')}</div><div class="form-grid"><label>Punto de entrega<input id="order-pickup" value="${escapeHtml(state.order.pickup)}"/></label><label>Disponible desde<input id="order-ready-at" type="time" value="${escapeHtml(state.order.readyAt)}"/></label></div><button class="primary full" id="save-order">GUARDAR PEDIDO</button></div>`}
+function draftOverlay(){if(!state.draftZonePoints.length)return'';const pts=polygonString(state.draftZonePoints);return `<svg class="draft-overlay" viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points="${pts}" fill="rgba(74,168,255,.12)" stroke="#4aa8ff" stroke-width=".9" stroke-dasharray="2 1"/>${state.draftZonePoints.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r="1.2" fill="#fff" stroke="#4aa8ff" stroke-width=".6"/>`).join('')}</svg>`}
+function adminZones(){return `<div class="admin-section"><div class="admin-banner"><span>⌖</span><div><b>Editor de zonas</b><small>Toca puntos sobre el mapa para dibujar una zona. Mínimo 3 puntos.</small></div></div><div class="zone-editor-wrap"><div class="draw-map" id="draw-map">${stadiumSvg('admin-map')}${draftOverlay()}</div></div><div class="draw-actions"><button class="ghost" id="undo-point">↶ Deshacer</button><button class="ghost" id="clear-points">Limpiar</button><span>${state.draftZonePoints.length} puntos</span></div><div class="form-grid"><label>Código<input id="new-zone-code" placeholder="O-16" maxlength="8"/></label><label>Tipo<select id="new-zone-kind">${Object.entries(kindMeta).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('')}</select></label></div><label>Nombre<input id="new-zone-name" placeholder="Nuevo sector"/></label><label>Indicación<textarea id="new-zone-note" placeholder="Qué debe saber el hincha en esta zona"></textarea></label><button class="primary full" id="save-zone" ${state.draftZonePoints.length<3?'disabled':''}>PUBLICAR ZONA</button><div class="admin-zone-list">${state.zones.map(z=>`<article><span style="background:${(kindMeta[z.kind]||kindMeta.general).color}"></span><div><b>${escapeHtml(z.code)} · ${escapeHtml(z.name)}</b><small>${(kindMeta[z.kind]||kindMeta.general).label}</small></div>${z.fixed?'':'<button data-delete-zone="'+escapeHtml(z.code)+'">Eliminar</button>'}</article>`).join('')}</div></div>`}
 
-function nav(){
-  const items=[['inicio','⌂','Inicio'],['tribuna','◉','En vivo'],['mapa','⌖','Oriente'],['pedidos','▣','Pedido']]
-  return `<nav class="bottom-nav">${items.map(([id,icon,label])=>`<button data-tab="${id}" class="${state.tab===id?'active':''}"><span style="font-size:20px">${icon}</span><span>${label}</span></button>`).join('')}</nav>`
-}
-
-function render(){
-  const root=document.getElementById('root')
-  const page = state.tab==='inicio' ? home() : state.tab==='tribuna' ? live() : state.tab==='mapa' ? map() : state.tab==='pedidos' ? orders() : repertorio()
-  root.innerHTML=`<div class="app-shell"><div class="ambient ambient-one"></div><div class="ambient ambient-two"></div><header class="topbar"><button class="brand" data-tab="inicio"><span class="brand-mark">OA</span><span><b>ORIENTE</b><small>Modo tribuna</small></span></button><div class="top-actions"><span class="live-pill"><span class="pulse"></span> PILOTO</span><button class="icon-button" id="open-admin">⚙️</button></div></header><main>${page}</main>${nav()}${admin()}</div>`
-  bind()
-}
+function nav(){const items=[['inicio','⌂','Inicio'],['tribuna','◉','En vivo'],['mapa','⌖','Oriente'],['pedidos','□','Pedido']];return `<nav class="bottom-nav">${items.map(([id,icon,label])=>`<button data-tab="${id}" class="${state.tab===id?'active':''}"><span>${icon}</span><b>${label}</b></button>`).join('')}</nav>`}
+function toast(){return state.toast?`<div class="toast ${state.toast.tone}"><span>${state.toast.tone==='success'?'✓':'i'}</span>${escapeHtml(state.toast.message)}</div>`:''}
+function render(){const root=document.getElementById('root');if(!root)return;let page=home();if(state.tab==='tribuna')page=live();else if(state.tab==='mapa')page=map();else if(state.tab==='pedidos')page=orders();else if(state.tab==='repertorio')page=repertorio();root.innerHTML=`<div class="app-shell">${header()}<main>${page}</main>${nav()}${admin()}${feedbackModal()}${songModal()}${locatorModal()}${toast()}</div>`;bind()}
 
 function bind(){
-  document.querySelectorAll('[data-tab]').forEach(btn=>btn.addEventListener('click',()=>{state.tab=btn.dataset.tab;render();window.scrollTo(0,0)}))
+  document.querySelectorAll('[data-tab]').forEach(el=>el.addEventListener('click',()=>{state.tab=el.dataset.tab;state.selectedZone=null;render();window.scrollTo({top:0,behavior:'smooth'})}))
   document.getElementById('open-admin')?.addEventListener('click',()=>{state.adminOpen=true;render()})
-  document.getElementById('close-admin')?.addEventListener('click',()=>{state.adminOpen=false;render()})
-  document.querySelectorAll('[data-mode]').forEach(btn=>btn.addEventListener('click',()=>{state.liveMode=btn.dataset.mode;render()}))
-  document.querySelectorAll('[data-song]').forEach(btn=>btn.addEventListener('click',()=>{state.currentSong=Number(btn.dataset.song);state.liveMode='CANTO';render()}))
-  document.getElementById('notice-input')?.addEventListener('input',e=>{state.notice=e.target.value})
-  document.getElementById('publish-state')?.addEventListener('click',()=>{state.adminOpen=false;state.tab='tribuna';render()})
-  document.getElementById('toggle-order')?.addEventListener('click',()=>{state.orderReady=!state.orderReady;render()})
-  document.getElementById('where-btn')?.addEventListener('click',()=>alert('Siguiente etapa: escaneo QR / cámara para ubicar tu sector de Oriente.'))
+  document.getElementById('close-admin')?.addEventListener('click',()=>{state.adminOpen=false;state.draftZonePoints=[];render()})
+  document.getElementById('admin-backdrop')?.addEventListener('click',e=>{if(e.target.id==='admin-backdrop'){state.adminOpen=false;state.draftZonePoints=[];render()}})
+  document.querySelectorAll('[data-admin-section]').forEach(el=>el.addEventListener('click',()=>{state.adminSection=el.dataset.adminSection;render()}))
+  document.getElementById('install-btn')?.addEventListener('click',installApp)
+  document.getElementById('vibration-btn')?.addEventListener('click',()=>{state.vibration=!state.vibration;persist();showToast(state.vibration?'Vibración activada':'Vibración desactivada')})
+  document.querySelectorAll('[data-zone]').forEach(el=>el.addEventListener('click',()=>{state.selectedZone=el.dataset.zone;render()}))
+  document.getElementById('close-zone')?.addEventListener('click',()=>{state.selectedZone=null;render()});document.getElementById('close-zone-primary')?.addEventListener('click',()=>{state.selectedZone=null;render()});document.getElementById('zone-sheet-backdrop')?.addEventListener('click',()=>{state.selectedZone=null;render()})
+  document.getElementById('where-btn')?.addEventListener('click',()=>{state.locatorOpen=true;render()});document.getElementById('close-locator')?.addEventListener('click',closeLocator);document.getElementById('start-camera')?.addEventListener('click',startCamera);document.getElementById('find-zone')?.addEventListener('click',findManualZone);document.getElementById('zone-code-input')?.addEventListener('keydown',e=>{if(e.key==='Enter')findManualZone()})
+  document.querySelectorAll('[data-learn]').forEach(el=>el.addEventListener('click',()=>toggleLearn(Number(el.dataset.learn))));document.querySelectorAll('[data-song-open]').forEach(el=>el.addEventListener('click',()=>{state.songModal=Number(el.dataset.songOpen);render()}));document.getElementById('close-song')?.addEventListener('click',()=>{state.songModal=null;render()})
+  document.querySelectorAll('[data-reserve]').forEach(el=>el.addEventListener('click',()=>{state.order.item=el.dataset.reserve;state.order.status='preparing';persist();showToast('Reserva demo creada. Puedes gestionarla desde el panel admin.','success')}))
+  document.getElementById('feedback-btn')?.addEventListener('click',()=>{state.feedbackModal=true;render()});document.getElementById('close-feedback')?.addEventListener('click',()=>{state.feedbackModal=false;render()})
+  document.querySelectorAll('[data-score]').forEach(el=>el.addEventListener('click',()=>{const f=state.feedback||{score:4,topic:'ambiente',text:''};state.feedback={...f,score:Number(el.dataset.score)};render()}));document.querySelectorAll('[data-topic]').forEach(el=>el.addEventListener('click',()=>{const f=state.feedback||{score:4,topic:'ambiente',text:''};state.feedback={...f,topic:el.dataset.topic};render()}));document.getElementById('save-feedback')?.addEventListener('click',()=>{const f=state.feedback||{score:4,topic:'ambiente',text:''};state.feedback={...f,text:document.getElementById('feedback-text')?.value||''};state.feedbackModal=false;persist();showToast('Opinión guardada en este dispositivo.','success')})
+  document.querySelectorAll('[data-mode]').forEach(el=>el.addEventListener('click',()=>{state.live.mode=el.dataset.mode;render()}));document.querySelectorAll('[data-admin-song]').forEach(el=>el.addEventListener('click',()=>{state.live.song=Number(el.dataset.adminSong);state.live.mode='CANTO';render()}));document.getElementById('admin-vibration')?.addEventListener('click',()=>{state.vibration=!state.vibration;persist();render()})
+  document.getElementById('publish-state')?.addEventListener('click',()=>{state.live.notice=document.getElementById('notice-input')?.value.trim()||state.live.notice;state.live.updatedAt=Date.now();state.adminOpen=false;state.tab='tribuna';persist();vibrate([60,40,60]);render();showToast('Señal publicada en este dispositivo.','success')})
+  document.getElementById('match-live-toggle')?.addEventListener('click',()=>{state.match.live=!state.match.live;render()});document.getElementById('save-match')?.addEventListener('click',()=>{state.match.rival=document.getElementById('match-rival')?.value.trim()||'RIVAL';state.match.dateLabel=document.getElementById('match-date')?.value.trim()||'Próximo partido';state.match.time=document.getElementById('match-time')?.value||state.match.time;state.match.gates=document.getElementById('match-gates')?.value||state.match.gates;persist();showToast('Partido actualizado.','success')})
+  document.querySelectorAll('[data-order-state]').forEach(el=>el.addEventListener('click',()=>{state.order.status=el.dataset.orderState;render()}));document.getElementById('save-order')?.addEventListener('click',()=>{state.order.pickup=document.getElementById('order-pickup')?.value.trim().toUpperCase()||state.order.pickup;state.order.readyAt=document.getElementById('order-ready-at')?.value||state.order.readyAt;persist();showToast('Estado del pedido guardado.','success')})
+  document.getElementById('draw-map')?.addEventListener('click',handleMapDraw);document.getElementById('undo-point')?.addEventListener('click',()=>{state.draftZonePoints.pop();render()});document.getElementById('clear-points')?.addEventListener('click',()=>{state.draftZonePoints=[];render()});document.getElementById('save-zone')?.addEventListener('click',saveZone);document.querySelectorAll('[data-delete-zone]').forEach(el=>el.addEventListener('click',()=>deleteZone(el.dataset.deleteZone)))
 }
 
-window.addEventListener('error', event => {
-  const root=document.getElementById('root')
-  if(root) root.innerHTML=`<div style="min-height:100vh;background:#030a13;color:white;padding:32px;font-family:system-ui"><h1>ORIENTE ALIANZA</h1><p>No se pudo iniciar la aplicación.</p><pre style="white-space:pre-wrap;color:#ffb4b4">${escapeHtml(event.message||'Error desconocido')}</pre></div>`
-})
+function toggleLearn(id){state.learned=state.learned.includes(id)?state.learned.filter(x=>x!==id):[...state.learned,id].sort((a,b)=>a-b);persist();vibrate(20);render()}
+function handleMapDraw(e){if(state.adminSection!=='zonas')return;if(e.target.closest('[data-zone]'))return;const box=e.currentTarget.getBoundingClientRect();if(!box.width||!box.height)return;const x=clamp(((e.clientX-box.left)/box.width)*100,1,99),y=clamp(((e.clientY-box.top)/box.height)*100,1,99);state.draftZonePoints.push([Number(x.toFixed(1)),Number(y.toFixed(1))]);render()}
+function saveZone(){if(state.draftZonePoints.length<3){showToast('Marca al menos 3 puntos.','warning');return}const code=(document.getElementById('new-zone-code')?.value||'').trim().toUpperCase(),name=(document.getElementById('new-zone-name')?.value||'').trim(),note=(document.getElementById('new-zone-note')?.value||'').trim(),kind=document.getElementById('new-zone-kind')?.value||'general';if(!code||!name){showToast('Completa código y nombre de la zona.','warning');return}if(state.zones.some(z=>z.code===code)){showToast('Ese código ya existe.','warning');return}state.zones.push({code,name,kind,note:note||'Zona creada desde el panel administrador.',points:[...state.draftZonePoints],fixed:false});state.draftZonePoints=[];persist();showToast(`Zona ${code} publicada.`,'success')}
+function deleteZone(code){const z=state.zones.find(x=>x.code===code);if(!z||z.fixed)return;state.zones=state.zones.filter(x=>x.code!==code);persist();showToast(`Zona ${code} eliminada.`,'success')}
 
+async function installApp(){if(state.installPrompt){state.installPrompt.prompt();const result=await state.installPrompt.userChoice;state.installPrompt=null;if(result.outcome==='accepted')showToast('Instalación iniciada.','success');return}if(isIOS())alert('En iPhone: toca Compartir y luego “Agregar a pantalla de inicio”.');else alert('Abre el menú del navegador y elige “Instalar aplicación” o “Agregar a pantalla principal”.')}
+function findManualZone(){const code=(document.getElementById('zone-code-input')?.value||'').trim().toUpperCase(),zone=state.zones.find(z=>z.code===code);if(!zone){showToast('No encontramos ese código de zona.','warning');return}stopCamera();state.locatorOpen=false;state.selectedZone=zone.code;state.tab='mapa';render();vibrate(30)}
+
+let cameraStream=null,scanTimer=null
+async function startCamera(){const status=document.getElementById('camera-status');try{cameraStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});const video=document.getElementById('camera-video');if(!video)return;video.srcObject=cameraStream;await video.play();if(status)status.textContent='Apunta a un QR de zona';if('BarcodeDetector'in window){const detector=new BarcodeDetector({formats:['qr_code']});scanTimer=setInterval(async()=>{try{const codes=await detector.detect(video),raw=(codes[0]?.rawValue||'').trim().toUpperCase(),zone=state.zones.find(z=>raw.includes(z.code));if(zone){stopCamera();state.locatorOpen=false;state.selectedZone=zone.code;state.tab='mapa';render();vibrate([40,30,40]);showToast(`Zona ${zone.code} detectada.`,'success')}}catch{}},700)}else if(status)status.textContent='Cámara activa. Este navegador no detecta QR automáticamente; usa el código manual.'}catch{if(status)status.textContent='No se pudo abrir la cámara. Revisa el permiso del navegador.'}}
+function stopCamera(){if(scanTimer){clearInterval(scanTimer);scanTimer=null}if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null}}
+function closeLocator(){stopCamera();state.locatorOpen=false;render()}
+
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();state.installPrompt=e;render()})
+window.addEventListener('appinstalled',()=>{state.installPrompt=null;showToast('Oriente Alianza instalada.','success')})
+window.addEventListener('online',()=>showToast('Conexión recuperada.','success'))
+window.addEventListener('offline',()=>showToast('Sin conexión. Se mantiene la información ya cargada.','warning'))
+window.addEventListener('error',event=>{console.error(event.error||event.message);const root=document.getElementById('root');if(root&&!root.querySelector('.app-shell'))root.innerHTML=`<div class="fatal"><span>OA</span><h1>No se pudo iniciar Oriente.</h1><p>${escapeHtml(event.message||'Error desconocido')}</p><button onclick="location.reload()">Volver a intentar</button></div>`})
+if('serviceWorker'in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}))
+document.documentElement.dataset.appVersion=APP_VERSION
 render()
