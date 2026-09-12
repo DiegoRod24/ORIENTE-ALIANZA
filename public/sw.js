@@ -1,5 +1,14 @@
-const CACHE = 'oriente-alianza-v4'
-const CORE = ['/', '/manifest.webmanifest', '/icon.svg']
+const CACHE = 'oriente-alianza-v5'
+const CORE = [
+  '/',
+  '/manifest.webmanifest',
+  '/logo-los-de-oriente.webp',
+  '/pollada-oriente.webp',
+  '/src/styles.css',
+  '/src/v5-addon.css',
+  '/src/app.js',
+  '/src/v5-addon.js'
+]
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)).catch(() => {}))
