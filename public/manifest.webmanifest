@@ -1,7 +1,7 @@
 {
   "name": "Oriente Alianza · Modo Tribuna",
   "short_name": "Oriente",
-  "description": "Experiencia piloto para preparar, orientar y coordinar Tribuna Oriente.",
+  "description": "Modo tribuna, repertorio, orientación, pedidos y organización de Tribuna Oriente.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
@@ -10,8 +10,8 @@
   "background_color": "#02070d",
   "theme_color": "#02070d",
   "lang": "es-PE",
-  "categories": ["sports", "lifestyle"],
+  "categories": ["sports", "lifestyle", "food"],
   "icons": [
-    {"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+    {"src":"/logo-los-de-oriente.webp","sizes":"320x320","type":"image/webp","purpose":"any maskable"}
   ]
 }
