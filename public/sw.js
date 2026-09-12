@@ -1,9 +1,10 @@
-const CACHE = 'oriente-alianza-v6.1'
+const CACHE = 'oriente-alianza-v6.2'
 const CORE = [
   '/',
   '/manifest.webmanifest',
   '/icon.svg',
   '/logo-oriente-v6.b64.txt',
+  '/logo-27-v6.b64.txt',
   '/pollo-parrilla-v6.b64.txt'
 ]
 
