@@ -1,9 +1,14 @@
-const CACHE = 'oriente-alianza-v5.1'
+const CACHE = 'oriente-alianza-v6'
 const CORE = [
   '/',
   '/manifest.webmanifest',
-  '/logo-los-de-oriente.webp',
-  '/pollada-oriente.webp'
+  '/icon.svg',
+  '/src/styles.css',
+  '/src/v5-addon.css',
+  '/src/app.js',
+  '/src/v5-addon.js',
+  '/logo-oriente-v6.b64.txt',
+  '/pollo-parrilla-v6.b64.txt'
 ]
 
 self.addEventListener('install', event => {
