@@ -1,13 +1,9 @@
-const CACHE = 'oriente-alianza-v5'
+const CACHE = 'oriente-alianza-v5.1'
 const CORE = [
   '/',
   '/manifest.webmanifest',
   '/logo-los-de-oriente.webp',
-  '/pollada-oriente.webp',
-  '/src/styles.css',
-  '/src/v5-addon.css',
-  '/src/app.js',
-  '/src/v5-addon.js'
+  '/pollada-oriente.webp'
 ]
 
 self.addEventListener('install', event => {
