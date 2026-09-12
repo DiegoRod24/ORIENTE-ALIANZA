@@ -1,7 +1,7 @@
 {
   "name": "Oriente Alianza · Modo Tribuna",
   "short_name": "Oriente",
-  "description": "Modo tribuna, repertorio, orientación, pedidos y organización de Tribuna Oriente.",
+  "description": "Modo tribuna, escuela de repertorio, orientación, fiesta, pedidos y organización de Tribuna Oriente.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
@@ -12,6 +12,6 @@
   "lang": "es-PE",
   "categories": ["sports", "lifestyle", "food"],
   "icons": [
-    {"src":"/logo-los-de-oriente.webp","sizes":"320x320","type":"image/webp","purpose":"any maskable"}
+    {"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
   ]
 }
